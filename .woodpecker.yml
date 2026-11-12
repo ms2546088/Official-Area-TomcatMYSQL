@@ -1,0 +1,15 @@
+when:
+  - event: push
+    branch: main
+
+steps:
+  - name: validate
+    image: docker/compose:latest
+    commands:
+      - docker compose config --quiet
+
+  - name: notify
+    image: alpine
+    commands:
+      - echo "Build passed for ${CI_REPO_NAME} on commit ${CI_COMMIT_SHA:0:8}"
+
