@@ -1,3 +1,4 @@
 # Official-Area-TomcatMYSQL
 
-Docker Compose: Tomcat + MySQL (port 58085)
+Stress test: 2026-11-12 13:35:19
+Parallel pipeline test
