@@ -1,0 +1,133 @@
+# ============================================================
+# Official-Area-TomcatMYSQL - Nginx + Tomcat + PHP + MySQL 8.0 + SSLH
+# 開發者: ms20250505~jpc
+# 首次開發日期: 2025-12-05
+# 更新日期: 2026-01-29
+# 更新: 新增 SSLH 端口多路復用，58085 同時提供 HTTP + SSH
+# ms2546088筆記-2026-01-29 新增 SSLH 容器支援遠端管理
+# ============================================================
+
+services:
+  # MySQL 8.0 資料庫 (必須先啟動)
+  mysql:
+    image: mysql:8.0
+    container_name: ${CONTAINER_PREFIX}_mysql
+    network_mode: host
+    environment:
+      - TZ=${TZ}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_TCP_PORT=${MYSQL_PORT:-53308}
+    volumes:
+      - ${DATA_PATH}/mysql:/var/lib/mysql
+      - ${CONFIG_PATH}/mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - ${CONFIG_PATH}/mysql/init:/docker-entrypoint-initdb.d:ro
+      - ${LOG_PATH}/mysql:/var/log/mysql
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-P", "${MYSQL_PORT:-53308}", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # PHP-FPM 8.3 with MySQL Support
+  php:
+    image: php:8.3-fpm-alpine
+    container_name: ${CONTAINER_PREFIX}_php
+    network_mode: host
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ${WWW_PATH}:/usr/share/nginx/html
+      - ${CONFIG_PATH}/php/php.ini:/usr/local/etc/php/php.ini:ro
+      - ${CONFIG_PATH}/php/zzz-custom.conf:/usr/local/etc/php-fpm.d/zzz-custom.conf:ro
+      - ${CONFIG_PATH}/nginx/sites:/etc/nginx/conf.d
+      - ${CONFIG_PATH}/nginx/ssl:/etc/nginx/ssl:ro
+      - ${LOG_PATH}/php:/var/log/php
+      - ${BACKUP_PATH:-../Backup-area_TomcatMYSQL}:/backup
+      - ${PROJECT_PATH:-.}:/project:ro
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: >
+      sh -c "docker-php-ext-install pdo pdo_mysql mysqli && php-fpm"
+
+  # Tomcat 服務
+  tomcat:
+    image: tomcat:10.1-jdk21
+    container_name: ${CONTAINER_PREFIX}_tomcat
+    network_mode: host
+    environment:
+      - TZ=${TZ}
+      - CATALINA_OPTS=-Xms512m -Xmx1024m
+    volumes:
+      - ${CONFIG_PATH}/tomcat/server.xml:/usr/local/tomcat/conf/server.xml:ro
+      - ${CONFIG_PATH}/ssl:/usr/local/tomcat/conf/ssl:ro
+      - ${WWW_PATH}:/usr/local/tomcat/webapps/ROOT
+      - ${LOG_PATH}/tomcat:/usr/local/tomcat/logs
+      - ${DATA_PATH}/tomcat:/usr/local/tomcat/work
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Nginx 反向代理 (處理 admin API)
+  # ms2546088筆記-2026-01-29 修改: HTTP 端口改為 58185 (內部端口)
+  nginx:
+    image: nginx:alpine
+    container_name: ${CONTAINER_PREFIX}_nginx
+    network_mode: host
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_PATH}/nginx/sites:/etc/nginx/conf.d:ro
+      - ${WWW_PATH}:/usr/share/nginx/html
+      - ${LOG_PATH}/nginx:/var/log/nginx
+    depends_on:
+      php:
+        condition: service_started
+      tomcat:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:${NGINX_INTERNAL_PORT:-58185}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # SSLH 端口多路復用 (HTTP + SSH)
+  # ms2546088筆記-2026-01-29 新增
+  sslh:
+    build:
+      context: ${CONFIG_PATH}/sslh
+      dockerfile: Dockerfile
+      args:
+        SSH_ROOT_PASSWORD: ${SSH_ROOT_PASSWORD:-Admin958168@Secure!}
+    image: sslh-tomcatmysql:1.0
+    container_name: ${CONTAINER_PREFIX}_sslh
+    network_mode: host
+    environment:
+      - TZ=${TZ}
+      - SSH_ROOT_PASSWORD=${SSH_ROOT_PASSWORD:-Admin958168@Secure!}
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep sslh && pgrep sshd || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      nginx:
+        condition: service_healthy
